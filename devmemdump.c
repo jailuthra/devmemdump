@@ -1,15 +1,10 @@
 /*
- * devmem2.c: Simple program to read/write from/to any location in memory.
+ * devmemdump.c: Simple program to dump a bunch of registers from memory
  *
+ *  Copyright (C) 2023, Jai Luthra (me@jailuthra.in)
+ *
+ * Adapted from devmem2 tool
  *  Copyright (C) 2000, Jan-Derk Bakker (jdb@lartmaker.nl)
- *
- *
- * This software has been developed for the LART computing board
- * (http://www.lart.tudelft.nl/). The development has been sponsored by
- * the Mobile MultiMedia Communications (http://www.mmc.tudelft.nl/)
- * and Ubiquitous Communications (http://www.ubicom.tudelft.nl/)
- * projects.
- *
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -56,12 +51,14 @@ int main(int argc, char **argv) {
     int access_type = 'w';
     char fmt_str[128];
     size_t data_size;
+    uint64_t dump_len = 4;
+    uint32_t num_pages = 1;
 
     if(argc < 2) {
-        fprintf(stderr, "\nUsage:\t%s { address } [ type [ data ] ]\n"
-            "\taddress : memory address to act upon\n"
+        fprintf(stderr, "\nUsage:\t%s { address } [ type [ length ] ]\n"
+            "\taddress : base memory address to act upon\n"
             "\ttype    : access operation type : [b]yte, [h]alfword, [w]ord, [l]ong\n"
-            "\tdata    : data to be written\n\n",
+            "\tlength  : total length to dump (in bytes)\n\n",
             argv[0]);
         exit(1);
     }
@@ -70,77 +67,68 @@ int main(int argc, char **argv) {
     if(argc > 2)
         access_type = tolower(argv[2][0]);
 
-
-    if((fd = open("/dev/mem", O_RDWR | O_SYNC)) == -1) FATAL;
-    printf("/dev/mem opened.\n");
-    fflush(stdout);
-
-    /* Map one page */
-    map_base = mmap(0, MAP_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, target & ~MAP_MASK);
-    if(map_base == (void *) -1) FATAL;
-    printf("Memory mapped at address %p.\n", map_base);
-    fflush(stdout);
-
-    virt_addr = map_base + (target & MAP_MASK);
     switch(access_type) {
         case 'b':
             data_size = sizeof(unsigned char);
-            virt_addr = fixup_addr(virt_addr, data_size);
-            read_result = *((unsigned char *) virt_addr);
             break;
         case 'h':
             data_size = sizeof(unsigned short);
-            virt_addr = fixup_addr(virt_addr, data_size);
-            read_result = *((unsigned short *) virt_addr);
             break;
         case 'w':
             data_size = sizeof(uint32_t);
-            virt_addr = fixup_addr(virt_addr, data_size);
-            read_result = *((uint32_t *) virt_addr);
             break;
         case 'l':
             data_size = sizeof(uint64_t);
-            virt_addr = fixup_addr(virt_addr, data_size);
-            read_result = *((uint64_t *) virt_addr);
             break;
         default:
             fprintf(stderr, "Illegal data type '%c'.\n", access_type);
             exit(2);
     }
-    sprintf(fmt_str, "Read at address  0x%%08lX (%%p): 0x%%0%dlX\n", 2*data_size);
-    printf(fmt_str, (unsigned long)target, virt_addr, read_result);
+
+    if (argc > 3)
+        dump_len = strtoul(argv[3], 0, 0);
+    else
+        dump_len = data_size;
+
+    if((fd = open("/dev/mem", O_RDWR | O_SYNC)) == -1) FATAL;
+    printf("/dev/mem opened.\n");
     fflush(stdout);
 
-    if(argc > 3) {
-        write_val = strtoul(argv[3], 0, 0);
+    num_pages = 1 + ((target + dump_len - 1) - (target & ~MAP_MASK))/MAP_SIZE;
+    printf("Read %llu bytes (across %lu pages) from 0x%08lX\n", dump_len, num_pages, target);
+
+    /* Map pages */
+    map_base = mmap(0, num_pages*MAP_SIZE, PROT_READ, MAP_SHARED, fd, target & ~MAP_MASK);
+    if(map_base == (void *) -1) FATAL;
+    printf("Memory mapped at address %p.\n", map_base);
+    fflush(stdout);
+
+    virt_addr = map_base + (target & MAP_MASK);
+    virt_addr = fixup_addr(virt_addr, data_size);
+
+    while (virt_addr < (map_base + (target & MAP_MASK) + dump_len)) {
         switch(access_type) {
             case 'b':
-                virt_addr = fixup_addr(virt_addr, sizeof(unsigned char));
-                *((unsigned char *) virt_addr) = write_val;
                 read_result = *((unsigned char *) virt_addr);
                 break;
             case 'h':
-                virt_addr = fixup_addr(virt_addr, sizeof(unsigned short));
-                *((unsigned short *) virt_addr) = write_val;
                 read_result = *((unsigned short *) virt_addr);
                 break;
             case 'w':
-                virt_addr = fixup_addr(virt_addr, sizeof(uint32_t));
-                *((uint32_t *) virt_addr) = write_val;
                 read_result = *((uint32_t *) virt_addr);
                 break;
             case 'l':
-                virt_addr = fixup_addr(virt_addr, sizeof(uint64_t));
-                *((uint64_t *) virt_addr) = write_val;
                 read_result = *((uint64_t *) virt_addr);
                 break;
+            default:
+                fprintf(stderr, "Illegal data type '%c'.\n", access_type);
+                exit(2);
         }
-        sprintf(fmt_str, "Write at address 0x%%08lX (%%p): 0x%%0%dlX, "
-                "readback 0x%%0%dlX\n", 2*data_size, 2*data_size);
-        printf(fmt_str, (unsigned long)target, virt_addr,
-               write_val, read_result);
-        fflush(stdout);
+        sprintf(fmt_str, "0x%%08lX\t0x%%0%dlX\n", 2*data_size);
+        printf(fmt_str, target + (virt_addr - (map_base + (target & MAP_MASK))), read_result);
+        virt_addr += data_size;
     }
+    fflush(stdout);
 
     if(munmap(map_base, MAP_SIZE) == -1) FATAL;
     close(fd);

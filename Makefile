@@ -1,11 +1,11 @@
-SRC=devmem2.c
+SRC=devmemdump.c
 
-devmem2: $(SRC)
+devmemdump: $(SRC)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(SRC)
 
 install:
 	mkdir -p $(DESTDIR)/usr/bin
-	install devmem2 $(DESTDIR)/usr/bin
+	install devmemdump $(DESTDIR)/usr/bin
 
 clean:
-	rm -f devmem2
+	rm -f devmemdump
